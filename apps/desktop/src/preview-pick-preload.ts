@@ -3,6 +3,7 @@ import { ipcRenderer } from "electron";
 import {
   PASSKEY_BRIDGE_ARGUMENT,
   PRIMARY_PASTE_DISABLED_ARGUMENT,
+  SECURITY_KEY_BRIDGE_ARGUMENT,
 } from "./preview/GuestProtocol.ts";
 import { installPasskeyBridge } from "./preview/PasskeyBridge.ts";
 import "./preview/PickPreload.ts";
@@ -10,6 +11,10 @@ import "./preview/PickPreload.ts";
 // Electron hands webPreferences.additionalArguments to sandboxed preloads in process.argv.
 if (process.argv.includes(PASSKEY_BRIDGE_ARGUMENT)) {
   installPasskeyBridge((channel, publicKey) => ipcRenderer.invoke(channel, publicKey));
+} else if (process.argv.includes(SECURITY_KEY_BRIDGE_ARGUMENT)) {
+  installPasskeyBridge((channel, publicKey) => ipcRenderer.invoke(channel, publicKey), {
+    securityKeysOnly: true,
+  });
 }
 
 if (process.argv.includes(PRIMARY_PASTE_DISABLED_ARGUMENT)) {

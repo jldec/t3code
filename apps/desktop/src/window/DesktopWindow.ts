@@ -33,6 +33,7 @@ import {
 import {
   PASSKEY_BRIDGE_ARGUMENT,
   PRIMARY_PASTE_DISABLED_ARGUMENT,
+  SECURITY_KEY_BRIDGE_ARGUMENT,
 } from "../preview/GuestProtocol.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
@@ -633,7 +634,9 @@ export const make = Effect.gen(function* () {
       if (previewPasskeys.bridgeEnabled) {
         webPreferences.additionalArguments = [
           ...(webPreferences.additionalArguments ?? []),
-          PASSKEY_BRIDGE_ARGUMENT,
+          previewPasskeys.bridgeSecurityKeysOnly
+            ? SECURITY_KEY_BRIDGE_ARGUMENT
+            : PASSKEY_BRIDGE_ARGUMENT,
         ];
       }
       if (!primaryPaste.enabled) {

@@ -52,6 +52,7 @@ import * as DesktopWindow from "./DesktopWindow.ts";
 import {
   PASSKEY_BRIDGE_ARGUMENT,
   PRIMARY_PASTE_DISABLED_ARGUMENT,
+  SECURITY_KEY_BRIDGE_ARGUMENT,
 } from "../preview/GuestProtocol.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
@@ -254,6 +255,7 @@ function layerTest(input: {
   }>;
   readonly primaryPasteEnabled?: boolean;
   readonly previewPasskeyBridgeEnabled?: boolean;
+  readonly previewPasskeyBridgeSecurityKeysOnly?: boolean;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
@@ -361,6 +363,7 @@ function layerTest(input: {
         }),
         Layer.mock(PreviewPasskeys.PreviewPasskeys)({
           bridgeEnabled: input.previewPasskeyBridgeEnabled ?? false,
+          bridgeSecurityKeysOnly: input.previewPasskeyBridgeSecurityKeysOnly ?? false,
           installSessionHandlers: () => {},
           attachGuest: () => () => {},
         }),
@@ -473,6 +476,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
           Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
           Layer.mock(PreviewPasskeys.PreviewPasskeys)({
             bridgeEnabled: false,
+            bridgeSecurityKeysOnly: false,
             installSessionHandlers: () => {},
             attachGuest: () => () => {},
           }),
@@ -1451,9 +1455,14 @@ describe("DesktopWindow", () => {
       expected: [PASSKEY_BRIDGE_ARGUMENT, PRIMARY_PASTE_DISABLED_ARGUMENT],
     },
     { primaryPasteEnabled: true, expected: [PASSKEY_BRIDGE_ARGUMENT] },
+    {
+      primaryPasteEnabled: true,
+      securityKeysOnly: true,
+      expected: [SECURITY_KEY_BRIDGE_ARGUMENT],
+    },
   ])(
-    "passes the primary-paste setting to preview guests (enabled: $primaryPasteEnabled)",
-    ({ primaryPasteEnabled, expected }) =>
+    "passes the primary-paste and passkey settings to preview guests (enabled: $primaryPasteEnabled)",
+    ({ primaryPasteEnabled, securityKeysOnly, expected }) =>
       Effect.gen(function* () {
         const fakeWindow = makeFakeBrowserWindow();
         const layer = layerTest({
@@ -1462,6 +1471,7 @@ describe("DesktopWindow", () => {
           mainWindow: yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none()),
           primaryPasteEnabled,
           previewPasskeyBridgeEnabled: true,
+          previewPasskeyBridgeSecurityKeysOnly: securityKeysOnly ?? false,
         });
 
         yield* Effect.gen(function* () {

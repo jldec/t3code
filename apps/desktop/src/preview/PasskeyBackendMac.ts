@@ -7,7 +7,7 @@ import type { PasskeyCeremonyResult } from "./PasskeyBridge.ts";
 const ES256 = -7;
 
 // WebAuthn rejects public suffix RP IDs, including private registries such as github.io.
-const isPublicSuffix = (domain: string) =>
+export const isPublicSuffix = (domain: string) =>
   domain !== "localhost" && getPublicSuffix(domain, { allowPrivateDomains: true }) === domain;
 
 // Loaded only once a ceremony runs: the module and its native addon ship on macOS alone.

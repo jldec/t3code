@@ -197,20 +197,46 @@ const credentialFromGetResult = (data: Extract<GetCredentialResult, { success: t
 const abortReason = (signal: AbortSignal) =>
   signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
 
+/** The security key backend's answer when no USB key is plugged in; the page then gets native WebAuthn. */
+export const SECURITY_KEY_ABSENT = "SecurityKeyAbsent";
+
+// Allow lists that name only platform or phone credentials stay native.
+const wantsSecurityKey = (publicKey: unknown) => {
+  const allowCredentials =
+    typeof publicKey === "object" && publicKey !== null && "allowCredentials" in publicKey
+      ? publicKey.allowCredentials
+      : undefined;
+  return (
+    !Array.isArray(allowCredentials) ||
+    allowCredentials.length === 0 ||
+    allowCredentials.some((credential: unknown) => {
+      if (typeof credential !== "object" || credential === null) return false;
+      const transports = "transports" in credential ? credential.transports : undefined;
+      return !Array.isArray(transports) || transports.length === 0 || transports.includes("usb");
+    })
+  );
+};
+
 /** Keep conditional requests native so autofill and upgrades cannot open a modal sheet unprompted. */
-export function installPasskeyBridge(invoke: InvokePasskeyCeremony) {
+export function installPasskeyBridge(
+  invoke: InvokePasskeyCeremony,
+  options: { readonly securityKeysOnly?: boolean } = {},
+) {
   if (typeof CredentialsContainer === "undefined" || typeof PublicKeyCredential === "undefined") {
     return;
   }
+  const securityKeysOnly = options.securityKeysOnly === true;
   const run = async (
     channel: PasskeyChannel,
     publicKey: unknown,
     signal: AbortSignal | undefined,
-  ): Promise<PublicKeyCredential> => {
+    fallback?: () => Promise<Credential | null>,
+  ): Promise<Credential | null> => {
     if (signal?.aborted) throw abortReason(signal);
     const ceremony = invoke(channel, toCloneable(publicKey)).then(
       (value) => {
         const result = value as PasskeyCeremonyResult;
+        if (!result.success && result.error === SECURITY_KEY_ABSENT && fallback) return fallback();
         if (!result.success) throw ceremonyError(result.error);
         return "attestationObject" in result.data
           ? credentialFromCreateResult(result.data)
@@ -238,20 +264,25 @@ export function installPasskeyBridge(invoke: InvokePasskeyCeremony) {
 
   define(
     container,
+    "get",
+    function get(this: CredentialsContainer, options?: CredentialRequestOptions) {
+      return options?.publicKey &&
+        options.mediation !== "conditional" &&
+        (!securityKeysOnly || wantsSecurityKey(options.publicKey))
+        ? run(PASSKEY_GET_CHANNEL, options.publicKey, options.signal, () =>
+            Reflect.apply(nativeGet, this, [options]),
+          )
+        : Reflect.apply(nativeGet, this, [options]);
+    },
+  );
+  if (securityKeysOnly) return;
+  define(
+    container,
     "create",
     function create(this: CredentialsContainer, options?: CreationOptions) {
       return options?.publicKey && options.mediation !== "conditional"
         ? run(PASSKEY_CREATE_CHANNEL, options.publicKey, options.signal)
         : Reflect.apply(nativeCreate, this, [options]);
-    },
-  );
-  define(
-    container,
-    "get",
-    function get(this: CredentialsContainer, options?: CredentialRequestOptions) {
-      return options?.publicKey && options.mediation !== "conditional"
-        ? run(PASSKEY_GET_CHANNEL, options.publicKey, options.signal)
-        : Reflect.apply(nativeGet, this, [options]);
     },
   );
 

@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { afterEach, vi } from "vite-plus/test";
 
 import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts";
-import { installPasskeyBridge } from "./PasskeyBridge.ts";
+import { SECURITY_KEY_ABSENT, installPasskeyBridge } from "./PasskeyBridge.ts";
 
 const base64Url = (bytes: ReadonlyArray<number>) => Buffer.from(bytes).toString("base64url");
 const bytesOf = (buffer: ArrayBuffer | null) => (buffer ? [...new Uint8Array(buffer)] : null);
@@ -27,7 +27,10 @@ const illegalInvocation = (): never => {
   throw new TypeError("Illegal invocation");
 };
 
-const install = (respond: (channel: string) => unknown) => {
+const install = (
+  respond: (channel: string) => unknown,
+  options?: Parameters<typeof installPasskeyBridge>[1],
+) => {
   const nativeCreate = vi.fn(async () => "native-create");
   const nativeGet = vi.fn(async () => "native-get");
   class FakeCredentialsContainer {
@@ -62,7 +65,7 @@ const install = (respond: (channel: string) => unknown) => {
   vi.stubGlobal("AuthenticatorAssertionResponse", FakeAssertionResponse);
 
   const invoke = vi.fn(async (channel: string, _publicKey: unknown) => respond(channel));
-  installPasskeyBridge(invoke);
+  installPasskeyBridge(invoke, options);
   return {
     invoke,
     nativeCreate,
@@ -143,6 +146,40 @@ describe("installPasskeyBridge", () => {
       .get({ publicKey: { challenge: new Uint8Array([1]) } })
       .catch((error: unknown) => error);
     assert.instanceOf(fetched, TypeError);
+  });
+
+  it("sends sign-ins a USB key can answer to the security key bridge", async () => {
+    let keyPresent = true;
+    const { invoke, credentials, nativeCreate, nativeGet } = install(
+      () =>
+        keyPresent
+          ? { success: true, data: assertionData }
+          : { success: false, error: SECURITY_KEY_ABSENT },
+      { securityKeysOnly: true },
+    );
+    const id = new Uint8Array([1, 2, 3]);
+    const get = (allowCredentials?: Array<PublicKeyCredentialDescriptor>) =>
+      credentials.get({
+        publicKey: {
+          challenge: new Uint8Array([1]),
+          ...(allowCredentials ? { allowCredentials } : {}),
+        },
+      });
+
+    await get([{ type: "public-key", id }]);
+    await get([{ type: "public-key", id, transports: ["internal", "usb"] }]);
+    await get();
+    await get([{ type: "public-key", id, transports: ["internal", "hybrid"] }]);
+    await credentials.create({ publicKey: creationOptions });
+
+    assert.strictEqual(invoke.mock.calls.length, 3);
+    assert.strictEqual(nativeGet.mock.calls.length, 1);
+    assert.strictEqual(nativeCreate.mock.calls.length, 1);
+
+    // With no key plugged in, a discoverable sign-in falls back to native WebAuthn.
+    keyPresent = false;
+    assert.strictEqual<unknown>(await get(), "native-get");
+    assert.strictEqual(invoke.mock.calls.length, 4);
   });
 
   it("rejects as soon as the page aborts, without waiting on the system sheet", async () => {

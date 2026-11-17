@@ -5,12 +5,14 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts";
 import type { PasskeyBackend, PasskeyCeremonyContext } from "./PasskeyBackend.ts";
 import { macPasskeyBackend } from "./PasskeyBackendMac.ts";
+import { makeUsbPasskeyBackend } from "./PasskeyBackendUsb.ts";
 import type { PasskeyCeremonyResult } from "./PasskeyBridge.ts";
 
 const PasskeyPackageMetadata = Schema.Struct({
@@ -41,6 +43,8 @@ export class PreviewPasskeys extends Context.Service<
   PreviewPasskeys,
   {
     readonly bridgeEnabled: boolean;
+    /** The bridge serves only allow-listed sign-ins, through a USB security key. */
+    readonly bridgeSecurityKeysOnly: boolean;
     /** Runs after app ready. */
     readonly configure: Effect.Effect<void>;
     readonly installSessionHandlers: (session: Session) => void;
@@ -113,6 +117,9 @@ const isTrustworthyOrigin = (origin: string) => {
 const backendFor = (platform: NodeJS.Platform): PasskeyBackend | undefined =>
   platform === "darwin" ? macPasskeyBackend : undefined;
 
+// Apps launched from Finder or a desktop entry get no shell PATH, so look where Homebrew and distros install libfido2.
+const FIDO2_TOOL_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -128,12 +135,32 @@ const make = Effect.gen(function* () {
           )
       : undefined;
   const keychainAccessGroup = metadata?.touchIdKeychainAccessGroup;
-  const backend = metadata?.browserPasskeys === true ? backendFor(environment.platform) : undefined;
+  const platformBackend =
+    metadata?.browserPasskeys === true ? backendFor(environment.platform) : undefined;
+  const fido2ToolDir =
+    platformBackend === undefined &&
+    (environment.platform === "darwin" || environment.platform === "linux")
+      ? yield* Effect.findFirst(FIDO2_TOOL_DIRS, (dir) =>
+          fileSystem
+            .exists(environment.path.join(dir, "fido2-assert"))
+            .pipe(Effect.orElseSucceed(() => false)),
+        )
+      : Option.none<string>();
+  const bridgeSecurityKeysOnly = Option.isSome(fido2ToolDir);
+  const backend =
+    platformBackend ??
+    (Option.isSome(fido2ToolDir)
+      ? makeUsbPasskeyBackend({
+          assert: environment.path.join(fido2ToolDir.value, "fido2-assert"),
+          token: environment.path.join(fido2ToolDir.value, "fido2-token"),
+        })
+      : undefined);
   const bridgeEnabled = backend !== undefined;
   const sessionsWithHandlers = new WeakSet<Session>();
 
   return PreviewPasskeys.of({
     bridgeEnabled,
+    bridgeSecurityKeysOnly,
     configure: Effect.gen(function* () {
       if (keychainAccessGroup === undefined) return;
       yield* Effect.try({
@@ -179,7 +206,11 @@ const make = Effect.gen(function* () {
         ceremonyPending = true;
         try {
           const result = await withDeadline(
-            ceremony({ origin, nativeWindowHandle: host.getNativeWindowHandle() }),
+            ceremony({
+              origin,
+              hostWindow: host,
+              nativeWindowHandle: host.getNativeWindowHandle(),
+            }),
             ceremonyDeadline(publicKey.timeout),
           );
           // A credential minted for a document that navigated away belongs to nobody.
